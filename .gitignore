@@ -1,0 +1,18 @@
+# Backend
+ipo-backend/target/
+ipo-backend/.mvn/
+ipo-backend/mvnw*
+ipo-backend/*.jar
+ipo-backend/.idea/
+ipo-backend/*.iml
+
+# Frontend
+ipo-frontend/node_modules/
+ipo-frontend/dist/
+ipo-frontend/.env.local
+
+# General
+*.log
+*.bak
+.DS_Store
+Thumbs.db
