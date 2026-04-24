@@ -6,7 +6,8 @@ import { useEffect, useState } from 'react';
 import axios from 'axios';
 import CreateOffer from './components/CreateOffer';
 import CreateCorporateTranche from './components/CreateCorporateTranche';
-
+import CheckEligibility from './components/CheckEligibility';
+import CreateSyndicateTranche from './components/CreateSyndicateTranche';
 // Simple component to show logged in status
 const Home = () => {
   const { keycloak, initialized } = useKeycloak();
@@ -55,8 +56,13 @@ const OfferList = () => {
         {offres.map(o => (
           <li key={o.id}>
             {o.natureTitre} - {o.typeOffre} - {o.montantGlobal}
+            {' '}
             <Link to={`/offres/${o.id}/add-tranche-corporate`}>
               <button>Add Corporate Tranche</button>
+            </Link>
+            {' '}
+            <Link to={`/offres/${o.id}/eligibility`}>
+              <button>Check Eligibility</button>
             </Link>
           </li>
         ))}
@@ -73,13 +79,21 @@ function App() {
         <nav>
           <Link to="/">Home</Link> | <Link to="/offres">Offers</Link>
           <Link to="/create-offer">Create Offer</Link>
+          <Link to={`/offres/${o.id}/add-tranche-syndicat`}>
+            <button>Add Syndicate Tranche</button>
+          </Link>
         </nav>
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/offres" element={<OfferList />} />
-          <Route path="/create-offer" element={<CreateOffer />} />
-          <Route path="/offres/:offreId/add-tranche-corporate" element={<CreateCorporateTranche />} />
-        </Routes>
+        <div className="container">
+          <Routes>
+            <Route path="/" element={<Home />} />
+            <Route path="/offres" element={<OfferList />} />
+            <Route path="/create-offer" element={<CreateOffer />} />
+            <Route path="/offres/:offreId/add-tranche-corporate" element={<CreateCorporateTranche />} />
+            <Route path="/offres/:offreId/eligibility" element={<CheckEligibility />} />
+            <Route path="/eligibility" element={<CheckEligibility />} />
+            <Route path="/offres/:offreId/add-tranche-syndicat" element={<CreateSyndicateTranche />} />
+          </Routes>
+        </div>
       </BrowserRouter>
     </ReactKeycloakProvider>
   );

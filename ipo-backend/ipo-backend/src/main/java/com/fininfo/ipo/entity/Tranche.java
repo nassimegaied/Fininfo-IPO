@@ -1,5 +1,6 @@
 package com.fininfo.ipo.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
 import java.math.BigDecimal;
@@ -48,5 +49,7 @@ public abstract class Tranche {
     // Each tranche belongs to one IPO offer
     @ManyToOne
     @JoinColumn(name = "offreipo_id")
+    @JsonIgnore
+
     private OffreIPO offreIPO;
 }
