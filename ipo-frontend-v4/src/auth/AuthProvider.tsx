@@ -1,16 +1,7 @@
 import { useEffect, useState, useRef, type ReactNode } from "react";
 import { Box, CircularProgress, Typography } from "@mui/material";
 import { AuthContext } from "./AuthContext";
-
-// Dynamic import to avoid moduleResolution issues with keycloak-js v26 ESM
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const Keycloak = require("keycloak-js").default;
-
-const keycloak = new Keycloak({
-  url: "http://localhost:8080",
-  realm: "ipo-realm",
-  clientId: "ipo-frontend",
-});
+import keycloak from "./keycloak";
 
 export default function AuthProvider({ children }: { children: ReactNode }) {
   const [authenticated, setAuthenticated] = useState(false);

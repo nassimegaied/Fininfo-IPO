@@ -1,26 +1,29 @@
-import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import KeyboardArrowDownRoundedIcon from "@mui/icons-material/KeyboardArrowDownRounded";
 import {
+  Alert,
   Box,
   Button,
+  CircularProgress,
   MenuItem,
   Select,
+  Snackbar,
   TextField,
   Typography,
 } from "@mui/material";
 import ConfirmDialog from "../components/ipo/ConfirmDialog";
 import {
-  clients,
-  instruments,
   societesBourse,
   typesOrdre,
   typesMarche,
   validitesOrdre,
-  tranches,
 } from "../mocks/apiData";
+import { fetchClients, fetchInstruments, type ClientOption, type InstrumentOption } from "../api/referenceApi";
+import { createOrdre, fetchOrdreById, updateOrdre, type OrdreDetail } from "../api/ordreApi";
+import { fetchIpoList, fetchTranchesByIpo, type IpoRow, type TrancheOption } from "../api/ipoApi";
 
 type CollecteOrdrePageMode = "create" | "edit" | "view";
 
@@ -28,29 +31,7 @@ type CollecteOrdreCreatePageProps = {
   mode?: CollecteOrdrePageMode;
 };
 
-type ClientOption = {
-  id: string;
-  label: string;
-  compteEspeces: string;
-  compteTitres: string;
-  devise: string;
-};
 
-type InstrumentOption = {
-  id: string;
-  mnemonique: string;
-  isin: string;
-  codeValeur: string;
-  description: string;
-  groupeCotation: string;
-  placeDenouement: string;
-};
-
-type TrancheOption = {
-  id: string;
-  label: string;
-  referenceIpo: string;
-};
 
 const fieldSx = {
   "& .MuiOutlinedInput-root": {
@@ -77,25 +58,28 @@ const readOnlyFieldSx = {
 
 function MiniSwitch({
   active = false,
+  disabled = false,
   onClick,
 }: {
   active?: boolean;
+  disabled?: boolean;
   onClick?: () => void;
 }) {
   return (
     <Box
       component="button"
       type="button"
-      onClick={onClick}
+      disabled={disabled}
+      onClick={disabled ? undefined : onClick}
       sx={{
         width: 20,
         height: 10,
         borderRadius: 999,
-        bgcolor: active ? "#20b8c8" : "#d4dbe2",
+        bgcolor: disabled ? "#e0e0e0" : active ? "#20b8c8" : "#d4dbe2",
         position: "relative",
         display: "inline-block",
         border: "none",
-        cursor: "pointer",
+        cursor: disabled ? "not-allowed" : "pointer",
         p: 0,
         "&::after": {
           content: '""',
@@ -115,29 +99,33 @@ function MiniSwitch({
 function ToggleChoice({
   text,
   active,
+  disabled = false,
   onClick,
 }: {
   text: string;
   active: boolean;
+  disabled?: boolean;
   onClick: () => void;
 }) {
   return (
     <Box
       component="button"
       type="button"
-      onClick={onClick}
+      disabled={disabled}
+      onClick={disabled ? undefined : onClick}
       sx={{
         display: "flex",
         alignItems: "center",
         gap: 0.6,
         border: "none",
         background: "transparent",
-        cursor: "pointer",
+        cursor: disabled ? "not-allowed" : "pointer",
         p: 0,
+        opacity: disabled ? 0.6 : 1,
       }}
     >
-      <Typography sx={switchTextSx}>{text}</Typography>
-      <MiniSwitch active={active} />
+      <Typography sx={{ fontSize: 13, color: "#2f3a45" }}>{text}</Typography>
+      <MiniSwitch active={active} disabled={disabled} />
     </Box>
   );
 }
@@ -186,10 +174,76 @@ export default function CollecteOrdreCreatePage({
   mode = "create",
 }: CollecteOrdreCreatePageProps) {
   const navigate = useNavigate();
+  const { id } = useParams<{ id: string }>();
   const isViewMode = mode === "view";
   const isEditMode = mode === "edit";
 
   const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: "success" | "error" }>({
+    open: false, message: "", severity: "success",
+  });
+
+  // ── Real IPO list, Tranches, Clients, Instruments ───────────────────────
+  const [ipoList, setIpoList] = useState<IpoRow[]>([]);
+  const [trancheList, setTrancheList] = useState<TrancheOption[]>([]);
+  const [clientList, setClientList] = useState<ClientOption[]>([]);
+  const [instrumentList, setInstrumentList] = useState<InstrumentOption[]>([]);
+  const [selectedIpoId, setSelectedIpoId] = useState<string>("");
+  const [loadingTranches, setLoadingTranches] = useState(false);
+  const trancheIdToRestoreRef = useRef<string | null>(null);
+
+  // Load lists on mount
+  useEffect(() => {
+    fetchIpoList()
+      .then(setIpoList)
+      .catch(() => console.warn("Could not load IPO list"));
+
+    fetchClients()
+      .then(setClientList)
+      .catch(() => console.warn("Could not load clients"));
+
+    fetchInstruments()
+      .then(setInstrumentList)
+      .catch(() => console.warn("Could not load instruments"));
+  }, []);
+
+  // When IPO selected, load its tranches.
+  // In edit/view mode we keep the saved tranche selection.
+  useEffect(() => {
+    if (!selectedIpoId) {
+      setTrancheList([]);
+      setTrancheId("");
+      return;
+    }
+
+    const trancheIdToRestore = trancheIdToRestoreRef.current;
+    setLoadingTranches(true);
+    if (!trancheIdToRestore) {
+      setTrancheId("");
+    }
+
+    fetchTranchesByIpo(selectedIpoId)
+      .then((tranches) => {
+        setTrancheList(tranches);
+
+        if (trancheIdToRestore) {
+          const exists = tranches.some(
+            (tranche) => String(tranche.id) === trancheIdToRestore
+          );
+          setTrancheId(exists ? trancheIdToRestore : "");
+          trancheIdToRestoreRef.current = null;
+        }
+      })
+      .catch(() => {
+        setTrancheList([]);
+        if (trancheIdToRestore) {
+          setTrancheId("");
+          trancheIdToRestoreRef.current = null;
+        }
+      })
+      .finally(() => setLoadingTranches(false));
+  }, [selectedIpoId]);
 
   const [clientId, setClientId] = useState("");
   const [clientSujetReservation, setClientSujetReservation] = useState(false);
@@ -207,20 +261,64 @@ export default function CollecteOrdreCreatePage({
   const [routage, setRoutage] = useState<"" | "oui" | "non">("");
   const [trancheId, setTrancheId] = useState("");
 
+  // Load existing order data in edit/view mode
+  useEffect(() => {
+    if ((mode === "edit" || mode === "view") && id) {
+      fetchOrdreById(id)
+        .then((data: OrdreDetail) => {
+          setClientId(data.clientId ?? "");
+          setQuantite(data.quantite != null ? String(data.quantite) : "");
+          setInstrumentId(data.instrumentId ?? "");
+          setSocieteBourse(data.societeBourse ?? "");
+          setTypeOrdre(data.typeOrdre ?? "");
+          setTypeMarche(data.typeMarche ?? "");
+          setValiditeOrdre(data.validite ?? "");
+          setPrix(data.prix != null ? String(data.prix) : "");
+          const savedTrancheId = data.trancheId != null ? String(data.trancheId) : "";
+          setTrancheId(savedTrancheId);
+          setReferencePrincipale(data.referenceIpo ?? "");
+          // ✅ Restore IPO dropdown so tranches reload for this order
+          if (data.offreIpoId != null) {
+            trancheIdToRestoreRef.current = savedTrancheId || null;
+            setSelectedIpoId(String(data.offreIpoId));
+          }
+        })
+        .catch(() => {
+          setSnackbar({ open: true, message: "Impossible de charger les données de l'ordre.", severity: "error" });
+        });
+    }
+  }, [id, mode]);
+
   const selectedClient = useMemo(
-    () => clients.find((client) => client.id === clientId) ?? null,
-    [clientId]
+    () => clientList.find((client) => String(client.id) === clientId) ?? null,
+    [clientList, clientId]
   );
 
   const selectedInstrument = useMemo(
-    () => instruments.find((instrument) => instrument.id === instrumentId) ?? null,
-    [instrumentId]
+    () => instrumentList.find((instrument) => String(instrument.id) === instrumentId) ?? null,
+    [instrumentList, instrumentId]
   );
 
+  // selectedTranche — look up the chosen tranche from the real API list
   const selectedTranche = useMemo(
-    () => tranches.find((tranche) => tranche.id === trancheId) ?? null,
-    [trancheId]
+    () => trancheList.find((t) => String(t.id) === trancheId) ?? null,
+    [trancheList, trancheId]
   );
+  // ── Form validation ───────────────────────────────────────────────
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const validateForm = (): boolean => {
+    const newErrors: Record<string, string> = {};
+    if (!clientId) newErrors.clientId = "Le donneur d'ordre est requis.";
+    if (!quantite || parseInt(quantite.replace(/\D/g, "")) <= 0)
+      newErrors.quantite = "La quantité doit être supérieure à 0.";
+    if (!selectedIpoId) newErrors.selectedIpoId = "Veuillez sélectionner une référence IPO.";
+    if (!trancheId) newErrors.trancheId = "Veuillez sélectionner une tranche.";
+    if (!instrumentId) newErrors.instrumentId = "L'instrument est requis.";
+    if (!societeBourse) newErrors.societeBourse = "Le membre négociateur est requis.";
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
 
   const showPrixField = typeOrdre === "Ordre à déclenchement";
 
@@ -236,24 +334,53 @@ export default function CollecteOrdreCreatePage({
     return "Formulaire collecte d'ordre IPO";
   }, [mode]);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (isViewMode) return;
-    console.log("Collecte ordre payload =", {
-      clientId,
-      clientSujetReservation,
-      referencePrincipale,
-      referenceOrdre,
-      quantite,
-      instrumentId,
-      societeBourse,
-      sensOrdre,
-      typeOrdre,
-      typeMarche,
-      validiteOrdre,
-      prix,
-      routage,
-      trancheId,
-    });
+    if (!validateForm()) return;  // ← stop if required fields are missing
+    setSaving(true);
+    try {
+      const payload: OrdreDetail = {
+        id: id ? Number(id) : null,
+        reference: null,
+        clientId,
+        clientLabel: selectedClient?.label ?? clientId,
+        compteEspeces: selectedClient?.compteEspeces ?? "",
+        compteTitres: selectedClient?.compteTitres ?? "",
+        instrumentId,
+        mnemonique: selectedInstrument?.mnemonique ?? "",
+        isin: selectedInstrument?.isin ?? "",
+        typeOrdre,
+        typeMarche,
+        societeBourse,
+        quantite: quantite ? parseInt(quantite.replace(/[^\d]/g, "")) : null,
+        prix: prix ? parseFloat(prix.replace(",", ".")) : null,
+        validite: validiteOrdre,
+        referenceIpo: selectedTranche?.referenceIpo ?? referencePrincipale,
+        trancheId: trancheId ? Number(trancheId) : null,
+        offreIpoId: selectedIpoId ? Number(selectedIpoId) : null,
+        status: null,
+      };
+
+      if (isEditMode && id) {
+        await updateOrdre(id, payload);
+        setSnackbar({ open: true, message: "Ordre mis à jour avec succès !", severity: "success" });
+      } else {
+        await createOrdre(payload);
+        setSnackbar({ open: true, message: "Ordre créé avec succès !", severity: "success" });
+      }
+      setErrors({});  // clear any previous validation errors
+
+      setTimeout(() => navigate("/collecte"), 1200);
+    } catch (err: any) {
+      console.error("Save error:", err);
+      setSnackbar({
+        open: true,
+        message: `Erreur : ${err.message ?? "Vérifiez que le backend est démarré."}`,
+        severity: "error",
+      });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleAskCancel = () => {
@@ -324,6 +451,7 @@ export default function CollecteOrdreCreatePage({
                 <Button
                   variant="contained"
                   onClick={handleSave}
+                  disabled={saving}
                   sx={{
                     textTransform: "none",
                     bgcolor: "#20b8c8",
@@ -332,13 +460,18 @@ export default function CollecteOrdreCreatePage({
                     borderRadius: 2,
                     fontWeight: 600,
                     boxShadow: "none",
+                    minWidth: 140,
                     "&:hover": {
                       bgcolor: "#17a9b8",
                       boxShadow: "none",
                     },
                   }}
                 >
-                  {isEditMode ? "Mettre à jour" : "Sauvegarder"}
+                  {saving ? (
+                    <CircularProgress size={20} sx={{ color: "#fff" }} />
+                  ) : (
+                    isEditMode ? "Mettre à jour" : "Sauvegarder"
+                  )}
                 </Button>
               )}
             </Box>
@@ -351,8 +484,6 @@ export default function CollecteOrdreCreatePage({
               gridTemplateColumns: "340px 1fr 210px",
               gap: 2,
               alignItems: "start",
-              pointerEvents: isViewMode ? "none" : "auto",
-              opacity: isViewMode ? 0.92 : 1,
             }}
           >
             <SectionFrame title="Détails client" minHeight={338}>
@@ -360,29 +491,34 @@ export default function CollecteOrdreCreatePage({
                 <Box>
                   <Typography sx={labelSx}>Donneur d'ordre *</Typography>
                   <Select
+                    disabled={isViewMode}
                     fullWidth
                     displayEmpty
                     value={clientId}
-                    onChange={(e) => setClientId(String(e.target.value))}
+                    onChange={(e) => { setClientId(String(e.target.value)); setErrors((p) => ({ ...p, clientId: "" })); }}
                     IconComponent={KeyboardArrowDownRoundedIcon}
-                    sx={fieldSx}
+                    sx={{ ...fieldSx, ...(errors.clientId ? { "& .MuiOutlinedInput-notchedOutline": { borderColor: "#dc2626" } } : {}) }}
                     renderValue={(selected) =>
                       selected
-                        ? clients.find((client) => client.id === selected)?.label ?? ""
+                        ? clientList.find((client) => String(client.id) === selected)?.label ?? ""
                         : "Donneur d'ordre *"
                     }
                   >
-                    {clients.map((client) => (
-                      <MenuItem key={client.id} value={client.id}>
+                    {clientList.map((client) => (
+                      <MenuItem key={client.id} value={String(client.id)}>
                         {client.label}
                       </MenuItem>
                     ))}
                   </Select>
+                  {errors.clientId && (
+                    <Typography sx={{ fontSize: 11, color: "#dc2626", mt: 0.4 }}>{errors.clientId}</Typography>
+                  )}
                 </Box>
 
                 <Box>
                   <Typography sx={labelSx}>Compte espèces Client*</Typography>
                   <Select
+                    disabled={isViewMode}
                     fullWidth
                     displayEmpty
                     value={selectedClient?.compteEspeces ?? ""}
@@ -403,6 +539,7 @@ export default function CollecteOrdreCreatePage({
                 <Box>
                   <Typography sx={labelSx}>Compte titres Client*</Typography>
                   <Select
+                    disabled={isViewMode}
                     fullWidth
                     displayEmpty
                     value={selectedClient?.compteTitres ?? ""}
@@ -423,10 +560,11 @@ export default function CollecteOrdreCreatePage({
                 <Box>
                   <Typography sx={labelSx}>Devise du compte espèce</Typography>
                   <TextField
+                    disabled={isViewMode}
                     fullWidth
                     value={selectedClient?.devise ?? ""}
                     placeholder="Devise du compte espèce"
-                    onChange={() => {}}
+                    onChange={() => { }}
                     sx={readOnlyFieldSx}
                   />
                 </Box>
@@ -451,12 +589,14 @@ export default function CollecteOrdreCreatePage({
                   </Typography>
 
                   <ToggleChoice
+                    disabled={isViewMode}
                     text="Oui"
                     active={clientSujetReservation}
                     onClick={() => setClientSujetReservation(true)}
                   />
 
                   <ToggleChoice
+                    disabled={isViewMode}
                     text="Non"
                     active={!clientSujetReservation}
                     onClick={() => setClientSujetReservation(false)}
@@ -474,6 +614,7 @@ export default function CollecteOrdreCreatePage({
                 }}
               >
                 <TextField
+                  disabled={isViewMode}
                   fullWidth
                   placeholder="Référence Principale"
                   value={referencePrincipale}
@@ -481,6 +622,7 @@ export default function CollecteOrdreCreatePage({
                   sx={fieldSx}
                 />
                 <TextField
+                  disabled={isViewMode}
                   fullWidth
                   placeholder="Référence de l'ordre"
                   value={referenceOrdre}
@@ -500,104 +642,131 @@ export default function CollecteOrdreCreatePage({
                   <Typography sx={labelInlineSx}>• Sens de l'ordre*</Typography>
 
                   <ToggleChoice
+                    disabled={isViewMode}
                     text="Achat"
                     active={sensOrdre === "achat"}
                     onClick={() => setSensOrdre("achat")}
                   />
 
                   <ToggleChoice
+                    disabled={isViewMode}
                     text="Vente"
                     active={sensOrdre === "vente"}
                     onClick={() => setSensOrdre("vente")}
                   />
                 </Box>
 
-                <TextField
-                  fullWidth
-                  placeholder="Quantité *"
-                  value={quantite}
-                  onChange={(e) =>
-                    setQuantite(e.target.value.replace(/[^\d.,]/g, ""))
-                  }
-                  sx={fieldSx}
-                />
+                <Box>
+                  <TextField
+                    disabled={isViewMode}
+                    fullWidth
+                    placeholder="Quantité *"
+                    value={quantite}
+                    onChange={(e) => {
+                      setQuantite(e.target.value.replace(/[^\d.,]/g, ""));
+                      setErrors((p) => ({ ...p, quantite: "" }));
+                    }}
+                    sx={{ ...fieldSx, ...(errors.quantite ? { "& .MuiOutlinedInput-notchedOutline": { borderColor: "#dc2626" } } : {}) }}
+                  />
+                  {errors.quantite && (
+                    <Typography sx={{ fontSize: 11, color: "#dc2626", mt: 0.4 }}>{errors.quantite}</Typography>
+                  )}
+                </Box>
 
-                <Select
-                  fullWidth
-                  displayEmpty
-                  value={instrumentId}
-                  onChange={(e) => setInstrumentId(String(e.target.value))}
-                  IconComponent={KeyboardArrowDownRoundedIcon}
-                  sx={fieldSx}
-                  renderValue={(selected) =>
-                    selected
-                      ? instruments.find((instrument) => instrument.id === selected)
+                <Box>
+                  <Select
+                    disabled={isViewMode}
+                    fullWidth
+                    displayEmpty
+                    value={instrumentId}
+                    onChange={(e) => { setInstrumentId(String(e.target.value)); setErrors((p) => ({ ...p, instrumentId: "" })); }}
+                    IconComponent={KeyboardArrowDownRoundedIcon}
+                    sx={{ ...fieldSx, ...(errors.instrumentId ? { "& .MuiOutlinedInput-notchedOutline": { borderColor: "#dc2626" } } : {}) }}
+                    renderValue={(selected) =>
+                      selected
+                        ? instrumentList.find((instrument) => String(instrument.id) === selected)
                           ?.mnemonique ?? ""
-                      : "Mnémonique*"
-                  }
-                >
-                  {instruments.map((instrument) => (
-                    <MenuItem key={instrument.id} value={instrument.id}>
-                      {instrument.mnemonique}
-                    </MenuItem>
-                  ))}
-                </Select>
+                        : "Mnémonique*"
+                    }
+                  >
+                    {instrumentList.map((instrument) => (
+                      <MenuItem key={instrument.id} value={String(instrument.id)}>
+                        {instrument.mnemonique}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                  {errors.instrumentId && (
+                    <Typography sx={{ fontSize: 11, color: "#dc2626", mt: 0.4 }}>{errors.instrumentId}</Typography>
+                  )}
+                </Box>
 
                 <TextField
+                  disabled={isViewMode}
                   fullWidth
                   placeholder="ISIN *"
                   value={selectedInstrument?.isin ?? ""}
-                  onChange={() => {}}
+                  onChange={() => { }}
                   sx={readOnlyFieldSx}
                 />
                 <TextField
+                  disabled={isViewMode}
                   fullWidth
                   placeholder="Code valeur  *"
                   value={selectedInstrument?.codeValeur ?? ""}
-                  onChange={() => {}}
+                  onChange={() => { }}
                   sx={readOnlyFieldSx}
                 />
 
                 <TextField
+                  disabled={isViewMode}
                   fullWidth
                   placeholder="Description de l'instrument"
                   value={selectedInstrument?.description ?? ""}
-                  onChange={() => {}}
+                  onChange={() => { }}
                   sx={readOnlyFieldSx}
                 />
                 <TextField
+                  disabled={isViewMode}
                   fullWidth
                   placeholder="Groupe de cotation"
                   value={selectedInstrument?.groupeCotation ?? ""}
-                  onChange={() => {}}
+                  onChange={() => { }}
                   sx={readOnlyFieldSx}
                 />
                 <TextField
+                  disabled={isViewMode}
                   fullWidth
                   placeholder="Place de dénouement *"
                   value={selectedInstrument?.placeDenouement ?? ""}
-                  onChange={() => {}}
+                  onChange={() => { }}
                   sx={readOnlyFieldSx}
                 />
-                <Select
-                  fullWidth
-                  displayEmpty
-                  value={societeBourse}
-                  onChange={(e) => setSocieteBourse(String(e.target.value))}
-                  IconComponent={KeyboardArrowDownRoundedIcon}
-                  sx={fieldSx}
-                  renderValue={(selected) =>
-                    selected ? String(selected) : "Société de bourse  *"
-                  }
-                >
-                  {societesBourse.map((item) => (
-                    <MenuItem key={item} value={item}>
-                      {item}
-                    </MenuItem>
-                  ))}
-                </Select>
+                <Box>
+                  <Select
+                    disabled={isViewMode}
+                    fullWidth
+                    displayEmpty
+                    value={societeBourse}
+                    onChange={(e) => { setSocieteBourse(String(e.target.value)); setErrors((p) => ({ ...p, societeBourse: "" })); }}
+                    IconComponent={KeyboardArrowDownRoundedIcon}
+                    sx={{ ...fieldSx, ...(errors.societeBourse ? { "& .MuiOutlinedInput-notchedOutline": { borderColor: "#dc2626" } } : {}) }}
+                    renderValue={(selected) =>
+                      selected ? String(selected) : "Société de bourse  *"
+                    }
+                  >
+                    {societesBourse.map((item) => (
+                      <MenuItem key={item} value={item}>
+                        {item}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                  {errors.societeBourse && (
+                    <Typography sx={{ fontSize: 11, color: "#dc2626", mt: 0.4 }}>{errors.societeBourse}</Typography>
+                  )}
+                </Box>
 
                 <Select
+                  disabled={isViewMode}
                   fullWidth
                   displayEmpty
                   value={typeOrdre}
@@ -617,6 +786,7 @@ export default function CollecteOrdreCreatePage({
 
                 {showPrixField ? (
                   <TextField
+                    disabled={isViewMode}
                     fullWidth
                     placeholder="Prix *"
                     value={prix}
@@ -630,6 +800,7 @@ export default function CollecteOrdreCreatePage({
                 )}
 
                 <Select
+                  disabled={isViewMode}
                   fullWidth
                   displayEmpty
                   value={validiteOrdre}
@@ -650,6 +821,7 @@ export default function CollecteOrdreCreatePage({
                 <Box />
 
                 <Select
+                  disabled={isViewMode}
                   fullWidth
                   displayEmpty
                   value={typeMarche}
@@ -678,12 +850,14 @@ export default function CollecteOrdreCreatePage({
                   <Typography sx={labelInlineSx}>Routage :</Typography>
 
                   <ToggleChoice
+                    disabled={isViewMode}
                     text="Non"
                     active={routage === "non"}
                     onClick={() => setRoutage("non")}
                   />
 
                   <ToggleChoice
+                    disabled={isViewMode}
                     text="Oui"
                     active={routage === "oui"}
                     onClick={() => setRoutage("oui")}
@@ -694,36 +868,93 @@ export default function CollecteOrdreCreatePage({
 
             <SectionFrame title="Détails Tranche" minHeight={338}>
               <Box sx={{ display: "grid", gap: 1.75 }}>
+
+                {/* Step 1 — Pick the IPO reference */}
+                <Box>
+                  <Typography sx={labelSx}>Référence IPO *</Typography>
+                  <Select
+                    disabled={isViewMode}
+                    fullWidth
+                    displayEmpty
+                    value={selectedIpoId}
+                    onChange={(e) => {
+                      trancheIdToRestoreRef.current = null;
+                      setSelectedIpoId(String(e.target.value));
+                      setErrors((p) => ({ ...p, selectedIpoId: "" }));
+                    }}
+                    IconComponent={KeyboardArrowDownRoundedIcon}
+                    sx={{ ...fieldSx, ...(errors.selectedIpoId ? { "& .MuiOutlinedInput-notchedOutline": { borderColor: "#dc2626" } } : {}) }}
+                    renderValue={(selected) =>
+                      selected
+                        ? ipoList.find((ipo) => String(ipo.id) === selected)?.reference ?? selected
+                        : "Sélectionner une IPO"
+                    }
+                  >
+                    {ipoList.length === 0 ? (
+                      <MenuItem disabled value="">
+                        Aucune IPO disponible
+                      </MenuItem>
+                    ) : (
+                      ipoList.map((ipo) => (
+                        <MenuItem key={ipo.id} value={String(ipo.id)}>
+                          {ipo.reference} — {ipo.typeOffre}
+                        </MenuItem>
+                      ))
+                    )}
+                  </Select>
+                  {errors.selectedIpoId && (
+                    <Typography sx={{ fontSize: 11, color: "#dc2626", mt: 0.4 }}>{errors.selectedIpoId}</Typography>
+                  )}
+                </Box>
+
+                {/* Step 2 — Pick a tranche from that IPO */}
                 <Box>
                   <Typography sx={labelSx}>Tranche</Typography>
                   <Select
                     fullWidth
                     displayEmpty
+                    disabled={isViewMode || !selectedIpoId || loadingTranches}
                     value={trancheId}
-                    onChange={(e) => setTrancheId(String(e.target.value))}
-                    IconComponent={KeyboardArrowDownRoundedIcon}
-                    sx={fieldSx}
+                    onChange={(e) => {
+                      setTrancheId(String(e.target.value));
+                      setErrors((p) => ({ ...p, trancheId: "" }));
+                    }}
+                    IconComponent={loadingTranches ? CircularProgress : KeyboardArrowDownRoundedIcon}
+                    sx={{ ...fieldSx, ...(errors.trancheId ? { "& .MuiOutlinedInput-notchedOutline": { borderColor: "#dc2626" } } : {}) }}
                     renderValue={(selected) =>
                       selected
-                        ? tranches.find((tranche) => tranche.id === selected)?.label ?? ""
-                        : "Tranche"
+                        ? trancheList.find((t) => String(t.id) === selected)?.label ?? selected
+                        : selectedIpoId
+                          ? loadingTranches
+                            ? "Chargement..."
+                            : "Sélectionner une tranche"
+                          : "Choisir d'abord une IPO"
                     }
                   >
-                    {tranches.map((tranche) => (
-                      <MenuItem key={tranche.id} value={tranche.id}>
+                    {trancheList.map((tranche) => (
+                      <MenuItem key={tranche.id} value={String(tranche.id)}>
                         {tranche.label}
                       </MenuItem>
                     ))}
                   </Select>
+                  {errors.trancheId && (
+                    <Typography sx={{ fontSize: 11, color: "#dc2626", mt: 0.4 }}>{errors.trancheId}</Typography>
+                  )}
                 </Box>
 
+                {/* Auto-filled Référence IPO from selected tranche */}
                 <Box>
-                  <Typography sx={labelSx}>Référence IPO</Typography>
+                  <Typography sx={labelSx}>Référence IPO (auto)</Typography>
                   <TextField
+                    disabled={isViewMode}
                     fullWidth
-                    value={selectedTranche?.referenceIpo ?? ""}
+                    value={
+                      trancheList.find((t) => String(t.id) === trancheId)?.referenceIpo
+                      ?? ipoList.find((ipo) => String(ipo.id) === selectedIpoId)?.reference
+                      ?? ""
+                    }
                     placeholder="Référence IPO"
-                    onChange={() => {}}
+                    onChange={() => { }}
                     sx={readOnlyFieldSx}
                   />
                 </Box>
@@ -744,6 +975,23 @@ export default function CollecteOrdreCreatePage({
           onCancel={() => setConfirmCancelOpen(false)}
         />
       )}
+
+      {/* Toast notification */}
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={4000}
+        onClose={() => setSnackbar((s) => ({ ...s, open: false }))}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        <Alert
+          severity={snackbar.severity}
+          variant="filled"
+          onClose={() => setSnackbar((s) => ({ ...s, open: false }))}
+          sx={{ minWidth: 300 }}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </>
   );
 }

@@ -1,12 +1,12 @@
-import { useMemo, useState } from "react";
-import { Box, Button, Typography } from "@mui/material";
+import { useEffect, useMemo, useState } from "react";
+import { Box, Button, CircularProgress, Snackbar, Alert, Typography } from "@mui/material";
 import UploadFileOutlinedIcon from "@mui/icons-material/UploadFileOutlined";
 import IpoDetailsForm from "../components/ipo/IpoDetailsForm";
 import OperationParticipantsPanel from "../components/ipo/OperationParticipantsPanel";
 import IpoTabsBar from "../components/ipo/IpoTabsBar";
 import ConfirmDialog from "../components/ipo/ConfirmDialog";
 import ImportFileModal from "../components/ipo/ImportFileModal";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import type {
   CorporatePrerequisItem,
   IpoFormData,
@@ -14,6 +14,7 @@ import type {
   SyndicateTabData,
   TrancheData,
 } from "../types/ipo";
+import { createIpo, fetchIpoById, updateIpo, type IpoDetail } from "../api/ipoApi";
 
 type IpoPageMode = "create" | "edit" | "view";
 
@@ -203,6 +204,7 @@ export default function IpoCreatePage({
   initialData,
 }: IpoCreatePageProps) {
   const navigate = useNavigate();
+  const { id } = useParams<{ id: string }>();
   const isViewMode = mode === "view";
   const isEditMode = mode === "edit";
 
@@ -211,6 +213,43 @@ export default function IpoCreatePage({
   );
   const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [loadingData, setLoadingData] = useState(false);
+  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: "success" | "error" }>({
+    open: false, message: "", severity: "success",
+  });
+
+  // ── Load existing IPO data in edit/view mode ──────────────────────────────
+  useEffect(() => {
+    if ((mode === "edit" || mode === "view") && id) {
+      setLoadingData(true);
+      fetchIpoById(id)
+        .then((data: IpoDetail) => {
+          // Map backend DTO back to frontend form shape
+          setFormData((prev) => ({
+            ...prev,
+            details: {
+              ...prev.details,
+              offerType: data.typeOffre === "VARIABLE" ? "variable" : "fixed",
+              natureTitre: data.natureTitre ?? "",
+              prixSouscription: data.prixSouscription != null ? String(data.prixSouscription) : "",
+              nbNouvellesActions: data.nbNouvellesActions != null ? String(data.nbNouvellesActions) : "",
+              montantGlobalOperation: data.montantGlobalOperation != null ? String(data.montantGlobalOperation) : "",
+              valeurNominale: data.valeurNominale != null ? String(data.valeurNominale) : "",
+              periodeDebutSouscription: data.periodeDebutSouscription ?? "",
+              periodeFinSouscription: data.periodeFinSouscription ?? "",
+              nbActionsCeder: data.nbActionsCeder != null ? String(data.nbActionsCeder) : "",
+              dateVisaAmmc: data.dateVisaAmmc ?? "",
+              referenceVisaAmmc: data.referenceVisaAmmc ?? "",
+            },
+          }));
+        })
+        .catch(() => {
+          setSnackbar({ open: true, message: "Impossible de charger les données de l'IPO.", severity: "error" });
+        })
+        .finally(() => setLoadingData(false));
+    }
+  }, [id, mode]);
 
   const pageTitle = useMemo(() => {
     if (mode === "view") return "CONSULTATION INTRODUCTION EN BOURSE";
@@ -224,9 +263,48 @@ export default function IpoCreatePage({
     return "Introduction en bourse";
   }, [mode]);
 
-  const handleSave = () => {
+  // ── Save handler — calls API ──────────────────────────────────────────────
+  const handleSave = async () => {
     if (isViewMode) return;
-    console.log("IPO FORM DATA =", formData);
+    setSaving(true);
+    try {
+      const payload: IpoDetail = {
+        id: id ? Number(id) : null,
+        reference: null,
+        typeOffre: formData.details.offerType === "variable" ? "VARIABLE" : "FIXED",
+        status: null,
+        natureTitre: formData.details.natureTitre,
+        prixSouscription: formData.details.prixSouscription ? parseFloat(formData.details.prixSouscription.replace(",", ".")) : null,
+        nbNouvellesActions: formData.details.nbNouvellesActions ? parseInt(formData.details.nbNouvellesActions) : null,
+        montantGlobalOperation: formData.details.montantGlobalOperation ? parseFloat(formData.details.montantGlobalOperation.replace(",", ".")) : null,
+        valeurNominale: formData.details.valeurNominale ? parseFloat(formData.details.valeurNominale.replace(",", ".")) : null,
+        periodeDebutSouscription: formData.details.periodeDebutSouscription || null,
+        periodeFinSouscription: formData.details.periodeFinSouscription || null,
+        nbActionsCeder: formData.details.nbActionsCeder ? parseInt(formData.details.nbActionsCeder) : null,
+        dateVisaAmmc: formData.details.dateVisaAmmc || null,
+        referenceVisaAmmc: formData.details.referenceVisaAmmc || null,
+      };
+
+      if (isEditMode && id) {
+        await updateIpo(id, payload);
+        setSnackbar({ open: true, message: "IPO mis à jour avec succès !", severity: "success" });
+      } else {
+        await createIpo(payload);
+        setSnackbar({ open: true, message: "IPO créé avec succès !", severity: "success" });
+      }
+
+      // Navigate back to list after short delay so user sees the toast
+      setTimeout(() => navigate("/ipo"), 1200);
+    } catch (err: any) {
+      console.error("Save error:", err);
+      setSnackbar({
+        open: true,
+        message: `Erreur lors de la sauvegarde : ${err.message ?? "Vérifiez que le backend est démarré."}`,
+        severity: "error",
+      });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleAskCancel = () => {
@@ -302,6 +380,15 @@ export default function IpoCreatePage({
       tranches: prev.tranches.filter((tranche) => tranche.id !== trancheId),
     }));
   };
+
+  // ── Loading overlay while fetching existing IPO data ─────────────────────
+  if (loadingData) {
+    return (
+      <Box sx={{ display: "flex", justifyContent: "center", mt: 10 }}>
+        <CircularProgress sx={{ color: "#20b8c8" }} />
+      </Box>
+    );
+  }
 
   return (
     <>
@@ -381,6 +468,7 @@ export default function IpoCreatePage({
                     <Button
                       variant="contained"
                       onClick={handleSave}
+                      disabled={saving}
                       sx={{
                         textTransform: "none",
                         bgcolor: "#20b8c8",
@@ -389,13 +477,18 @@ export default function IpoCreatePage({
                         borderRadius: 2,
                         fontWeight: 600,
                         boxShadow: "none",
+                        minWidth: 140,
                         "&:hover": {
                           bgcolor: "#17a9b8",
                           boxShadow: "none",
                         },
                       }}
                     >
-                      {isEditMode ? "Mettre à jour" : "Sauvegarder"}
+                      {saving ? (
+                        <CircularProgress size={20} sx={{ color: "#fff" }} />
+                      ) : (
+                        isEditMode ? "Mettre à jour" : "Sauvegarder"
+                      )}
                     </Button>
                   )}
                 </Box>
@@ -485,6 +578,23 @@ export default function IpoCreatePage({
           onImport={handleImportFile}
         />
       )}
+
+      {/* Toast notification */}
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={4000}
+        onClose={() => setSnackbar((s) => ({ ...s, open: false }))}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        <Alert
+          severity={snackbar.severity}
+          variant="filled"
+          onClose={() => setSnackbar((s) => ({ ...s, open: false }))}
+          sx={{ minWidth: 300 }}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </>
   );
 }

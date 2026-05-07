@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import KeyboardArrowDownRoundedIcon from "@mui/icons-material/KeyboardArrowDownRounded";
 import MoreVertRoundedIcon from "@mui/icons-material/MoreVertRounded";
 import CheckCircleOutlineRoundedIcon from "@mui/icons-material/CheckCircleOutlineRounded";
@@ -9,6 +9,7 @@ import {
   Box,
   Button,
   Checkbox,
+  CircularProgress,
   IconButton,
   ListItemIcon,
   Menu,
@@ -17,7 +18,7 @@ import {
 } from "@mui/material";
 import { useNavigate } from "react-router-dom";
 import ConfirmDialog from "../components/ipo/ConfirmDialog";
-import { ipoRows as rows } from "../mocks/apiData";
+import { fetchIpoList, validateIpo, type IpoRow } from "../api/ipoApi";
 
 const headerButtonSx = {
   textTransform: "none",
@@ -32,13 +33,31 @@ const headerButtonSx = {
 
 export default function IpoListPage() {
   const navigate = useNavigate();
+  const [rows, setRows] = useState<IpoRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [actionsAnchorEl, setActionsAnchorEl] = useState<null | HTMLElement>(null);
   const [rowMenuAnchorEl, setRowMenuAnchorEl] = useState<null | HTMLElement>(null);
-  const [selectedRowId, setSelectedRowId] = useState<number | null>(28);
+  const [selectedRowId, setSelectedRowId] = useState<number | null>(null);
   const [confirmValidateOpen, setConfirmValidateOpen] = useState(false);
 
   const actionsMenuOpen = Boolean(actionsAnchorEl);
   const rowMenuOpen = Boolean(rowMenuAnchorEl);
+
+  // ── Load IPO list from API on mount ────────────────────────────────────────
+  useEffect(() => {
+    setLoading(true);
+    fetchIpoList()
+      .then((data) => {
+        setRows(data);
+        setError(null);
+      })
+      .catch((err) => {
+        setError("Impossible de charger les données. Vérifiez que le backend est démarré.");
+        console.error(err);
+      })
+      .finally(() => setLoading(false));
+  }, []);
 
   const handleOpenActionsMenu = (event: React.MouseEvent<HTMLElement>) => {
     setActionsAnchorEl(event.currentTarget);
@@ -84,10 +103,35 @@ export default function IpoListPage() {
     navigate("/ipo/create");
   };
 
-  const handleConfirmValidate = () => {
-    console.log("Validation confirmed for IPO row", selectedRowId);
+  const handleConfirmValidate = async () => {
+    if (selectedRowId == null) return;
+    try {
+      await validateIpo(selectedRowId);
+      // Refresh list after validation
+      const data = await fetchIpoList();
+      setRows(data);
+    } catch (err) {
+      console.error("Validation failed", err);
+    }
     setConfirmValidateOpen(false);
   };
+
+  // ── Loading / error states ─────────────────────────────────────────────────
+  if (loading) {
+    return (
+      <Box sx={{ display: "flex", justifyContent: "center", mt: 10 }}>
+        <CircularProgress sx={{ color: "#20b8c8" }} />
+      </Box>
+    );
+  }
+
+  if (error) {
+    return (
+      <Box sx={{ px: 2.5, pt: 5, textAlign: "center" }}>
+        <Typography sx={{ color: "#ef4444", fontSize: 15 }}>{error}</Typography>
+      </Box>
+    );
+  }
 
   return (
     <>
@@ -216,12 +260,17 @@ export default function IpoListPage() {
                   }}
                 >
                   <Box sx={{ display: "flex", justifyContent: "center" }}>
-                    <Checkbox checked={selectedRowId === row.id} />
+                    <Checkbox
+                      checked={selectedRowId === row.id}
+                      onChange={() =>
+                        setSelectedRowId((prev) => (prev === row.id ? null : row.id))
+                      }
+                    />
                   </Box>
 
                   <BodyCell text={String(row.id)} />
                   <BodyCell text={row.reference} />
-                  <BodyCell text={row.prix} />
+                  <BodyCell text={row.prixSouscription != null ? String(row.prixSouscription) : "—"} />
                   <BodyCell text={row.typeOffre} />
                   <BodyCell text={row.status} />
 
